@@ -1,6 +1,6 @@
-# Low level driver for ADS68xx with XMC4500
+# Low level driver for TI ADS68xx (16-bit or 18-bit SPI ADC) with XMC4500
 
-Example of low level driver for analog to digital SPI converter ADS68xx working with
+Example of low level driver for analog to digital SPI converter TI ADS68xx (16-bit or 18-bit) working with
 Infineon [XMC4500][xmc4500]
 
 ---
@@ -19,13 +19,13 @@ Software was written in [Dave IDE][dave_ide] and compiled by [xPack GNU Arm Embe
 There are possible service ADS86xx in two different modes:
 
 - Default mode is interrupt mode.
-Conversion start is forced by interrupt from *CCU81_0* timer at frequency `ADS86_SAMPLING_FREQ = 100kHz`.
-Next rising edge of RVS pin (which means conversion is done) force interrupt which trigger SPI communication.
-Finish of SPI communication trigger last ISR. Data is read and put to *DAC* output.
+Start of conversion is forced by timer with sampling rate`ADS86_SAMPLING_FREQ = 100kHz`, interrupt `ADS86_Sampling_Isr`.
+Rising edge at RVS pin (which means conversion is done) forces interrupt `ADS86_RVS_PIN_Isr` which triggers SPI communication.
+Finish of SPI communication triggers last interrupt `ADS86_RxFifo_Isr`. Data is read and put to *DAC* output.
 
 - Polling mode in main loop.
 All triggers are done in function `ADS86XX_ServiceInPolling`.
-Rising edge of ALARM pin force interrupt which set flag `readAdsAlarms`.
+Rising edge at ALARM pin forces interrupt which sets flag `readAdsAlarms`.
 If `readAdsAlarms` is set alarm register of ADS86xx is read in function `ADS86XX_ServiceInPolling`.
 
 ---
