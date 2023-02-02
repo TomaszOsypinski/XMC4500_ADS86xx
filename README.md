@@ -16,7 +16,7 @@ Software was written in [Dave IDE][dave_ide] and compiled by [xPack GNU Arm Embe
 
 ### Mode of operation
 
-There are possible service ADS86xx in two different modes:
+There are possible two different modes of operation:
 
 - Default mode is interrupt mode.
 Start of conversion is forced by timer with sampling rate`ADS86_SAMPLING_FREQ = 100kHz`, interrupt `ADS86_Sampling_Isr`.
@@ -40,7 +40,7 @@ Input of ADS86xx is configured as`ADS86_RANGE_SEL_BI_0_625_VREF`, so accept ± 2
 
 <p align="center"> <img src="./img/step.png"> </p>
 
-#### Frequency response analysis
+#### Frequency response analysis (oscilloscope)
 
 <p align="center"> <img src="./img/fra.png"> </p>
 
@@ -50,6 +50,47 @@ Input of ADS86xx is configured as`ADS86_RANGE_SEL_BI_1_25_VREF`. Input signal is
 Number of samples 2^16, fs = 100kHz.
 
 <p align="center"> <img src="./img/Histogram_BI_1_25_VREF.png"> </p>
+
+
+## Design low-pass Butterworth IIR filter
+
+In folder *filter_py* ther is python script for design low-pass Butterworth IIR filter.
+
+For example, 4th order low-pass Butterworth IIR filter was designed using two *Second Order Section SOS*.
+Calculated coefficients for SOS section and graphs obteined from `sos_filter.py`:
+
+```c
+#ifndef SOS_COFF_H_
+#define SOS_COFF_H_
+
+#define SOS_COFF_NUM_OF_STAGES (2)
+
+static filter_iir_2_f32_t s0 = FILTER_IIR_2_INIT(
+1.86824893E-08f,
+3.73649787E-08f,
+1.86824893E-08f,
+1.95685128E+00f,
+-9.57394597E-01f);
+
+static filter_iir_2_f32_t s1 = FILTER_IIR_2_INIT(
+1.00000000E+00f,
+2.00000000E+00f,
+1.00000000E+00f,
+1.98157908E+00f,
+-9.82129258E-01f);
+
+static filter_iir_2_f32_t * s[SOS_COFF_NUM_OF_STAGES] = {&s0, &s1};
+
+#endif /* end of SOS_COFF_H_ */
+```
+
+#### Filter analysis graphs
+
+<p align="center"> <img src="./img/lowpass_butter_4_sos.png"> </p>
+
+#### Filter frequency response analysis (oscilloscope)
+
+<p align="center"> <img src="./img/scope_lowpass_butter_4_sos.png"> </p>
 
 ---
 

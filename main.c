@@ -114,7 +114,7 @@ int main(void)
 
     MODULE_TIME_InitDWT();
 
-    ADS86XX_Init(ADS86_RANGE_SEL_BI_0_625_VREF);
+    ADS86XX_Init(ADS86_RANGE_SEL_BI_1_5_VREF);
 
     DAC_Init();
 

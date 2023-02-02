@@ -50,6 +50,7 @@
 #include "ads86xx.h"
 #include "dac.h"
 #include "test_assert.h"
+#include "filter.h"
 
 #include <xmc_spi.h>
 #include <xmc_eru.h>
@@ -212,6 +213,7 @@ void ADS86_Sampling_Isr(void);
 void ADS86_RVS_PIN_Isr(void);
 void ADS86_RxFifo_Isr(void);
 void ADS86_ALARM_PIN_Isr(void);
+
 /*
  *******************************************************************************
  * the external functions
@@ -223,6 +225,29 @@ void ADS86_ALARM_PIN_Isr(void);
  * the functions
  *******************************************************************************
  */
+__STATIC_FORCEINLINE float32_t iir_sos(const float32_t in)
+{
+    #include "./filter_py/sos_coff.h"
+
+    s[0]->x[0] = in;
+
+    uint32_t i = 0U;
+    do
+    {
+        FILTER_IIR_2_f32(s[i]);
+
+        #if (SOS_COFF_NUM_OF_STAGES > 1)
+        if(i < (SOS_COFF_NUM_OF_STAGES - 1))
+        {
+            s[i + 1]->x[0] = s[i]->y[0];
+        }
+        #endif
+
+        i++;
+    } while(i < SOS_COFF_NUM_OF_STAGES);
+
+    return s[SOS_COFF_NUM_OF_STAGES - 1]->output;
+}
 
 static void ads86_spi_init(void)
 {
@@ -720,8 +745,13 @@ void ADS86_RxFifo_Isr(void)
      * Input signal for ADS86 is bipolar, conversion result is unipolar so
      * remove offset at middle scale (-0.5) is necessary.
      * Conversion to per unit */
-    float32_t tmp_pu = ((float32_t)(rx_frame.Data_U32 >> ADS86_CONV_RESAULT_POS) / (float32_t)ADS86_MAX_VAL) - 0.5f;
-    DAC_Ch0_PU_2_DAC(tmp_pu);
+    float32_t dac_ch0 = ((float32_t)(rx_frame.Data_U32 >> ADS86_CONV_RESAULT_POS) / (float32_t)ADS86_MAX_VAL) - 0.5f;
+
+    /* Apply filter */
+    float32_t dac_ch1 = iir_sos(dac_ch0);
+
+    DAC_Ch0_PU_2_DAC(dac_ch0);
+    DAC_Ch1_PU_2_DAC(dac_ch1);
     #endif
 }
 

@@ -86,7 +86,7 @@
 /**
  * ADS869x Sampling frequency in kHz
  */
-#define ADS86_SAMPLING_FREQ  (100.0e3f)
+#define ADS86_SAMPLING_FREQ  (40.0e3f)
 
 /**
  * Check parity on output data frames and ADC conversions enable/disable
