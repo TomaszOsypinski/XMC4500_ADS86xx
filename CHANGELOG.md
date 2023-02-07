@@ -12,5 +12,10 @@
 
 - Updated README.
 - Added low-pass filter example.
+
+## [1.0.3] - 2023-02-16
+
+- Small fixes
+
 ---
 Changelog written according to recommendations from https://keepachangelog.com/

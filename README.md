@@ -6,7 +6,8 @@ Infineon [XMC4500][xmc4500]
 ---
 
 You can easy port it to [XMC4500 RelaxKit][xmc4500_kit]
-- Change I/O configuration for ADS68xx and preprocessor definition from `XMC4500_F144x1024` to `XMC4500_F100x1024` 
+
+- Change I/O configuration for ADS68xx and preprocessor definition from `XMC4500_F144x1024` to `XMC4500_F100x1024`
 
 ---
 
@@ -14,7 +15,7 @@ Software was written in [Dave IDE][dave_ide] and compiled by [xPack GNU Arm Embe
 
 ---
 
-### Mode of operation
+## Mode of operation
 
 There are possible two different modes of operation:
 
@@ -34,30 +35,29 @@ If `readAdsAlarms` is set alarm register of ADS86xx is read in function `ADS86XX
 
 Input of ADS86xx is configured as`ADS86_RANGE_SEL_BI_0_625_VREF`, so accept ± 2.56V at input. Service in ISR mode.
 
-#### Step response
+### Step response
 
 `Ch_1` input signal, `Ch_2` output signal from DAC channel 0 of XMC4500
 
 <p align="center"> <img src="./img/step.png"> </p>
 
-#### Frequency response analysis (oscilloscope)
+### Frequency response analysis (oscilloscope)
 
 <p align="center"> <img src="./img/fra.png"> </p>
 
-#### Histogram
+### Histogram
 
 Input of ADS86xx is configured as`ADS86_RANGE_SEL_BI_1_25_VREF`. Input signal is 0V.
 Number of samples 2^16, fs = 100kHz.
 
 <p align="center"> <img src="./img/Histogram_BI_1_25_VREF.png"> </p>
 
-
 ## Design low-pass Butterworth IIR filter
 
-In folder *filter_py* ther is python script for design low-pass Butterworth IIR filter.
+In folder *filter_py* there is python script for design low-pass Butterworth IIR filter.
 
 For example, 4th order low-pass Butterworth IIR filter was designed using two *Second Order Section SOS*.
-Calculated coefficients for SOS section and graphs obteined from `sos_filter.py`:
+Calculated coefficients for SOS section and graphs obtained from `sos_filter.py`:
 
 ```c
 #ifndef SOS_COFF_H_
@@ -84,11 +84,11 @@ static filter_iir_2_f32_t * s[SOS_COFF_NUM_OF_STAGES] = {&s0, &s1};
 #endif /* end of SOS_COFF_H_ */
 ```
 
-#### Filter analysis graphs
+### Filter analysis graphs
 
 <p align="center"> <img src="./img/lowpass_butter_4_sos.png"> </p>
 
-#### Filter frequency response analysis (oscilloscope)
+### Filter frequency response analysis (oscilloscope)
 
 <p align="center"> <img src="./img/scope_lowpass_butter_4_sos.png"> </p>
 

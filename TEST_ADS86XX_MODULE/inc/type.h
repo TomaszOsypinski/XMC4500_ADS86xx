@@ -1,8 +1,8 @@
 /**
  *******************************************************************************
  * @file    type.h
- * @version 1.0.0
- * @date    2023-01-18
+ * @version 1.0.1
+ * @date    2023-02-07
  * @brief   Definition of float32_t and float64_t
  * @author  Tomasz Osypinski <br>
  *
@@ -12,6 +12,9 @@
  *
  * 2023-01-18:
  *      - Initial <br>
+ *
+ * 2023-02-07:
+ *      - Fix in type of float64_t <br>
  *******************************************************************************
  */
 
@@ -80,7 +83,7 @@
  */
 #ifndef float64_t_DEFINED
     #define float64_t_DEFINED
-    typedef float float64_t;
+    typedef double float64_t;
 #endif
 
 /*
