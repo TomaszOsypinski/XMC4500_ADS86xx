@@ -1,16 +1,15 @@
 /**
  *******************************************************************************
- * @file    dac.h
+ * @file    pin_interrupt.h
  * @version 1.0.0
- * @date    2023-01-18
- * @brief   DAC functions
- * @author  Tomasz Osypinski<br>
- *
+ * @date    2023-01-27
+ * @brief   Pin interrupt initialization function
+ * @author  Tomasz Osypinski
  *
  * Change History
  * --------------
  *
- * 2023-01-18:
+ * 2023-01-27:
  *      - Initial <br>
  *******************************************************************************
  */
@@ -42,62 +41,40 @@
  * SUCH DAMAGE.
  */
 
-#ifndef DAC_H_
-#define DAC_H_
-
 /*
  *******************************************************************************
  * the includes
  *******************************************************************************
  */
-#include "type.h"
-#include <xmc_dac.h>
-#include <xmc_common.h>
+#include "pin_interrupt.h"
 
-/**
- * @addtogroup TEST_ADS86XX_MODULE
- * @{
- */
-
-/**
- * @addtogroup DAC
- * @brief DAC functions
- * @{
- */
+/* Switch on pedantic checking */
+#if defined ( __GNUC__ )
+#pragma GCC diagnostic push
+#pragma GCC diagnostic warning "-Wpedantic"
+#pragma GCC diagnostic warning "-Wall"
+#pragma GCC diagnostic warning "-Wextra"
+#pragma GCC diagnostic warning "-Wconversion"
+#pragma GCC diagnostic warning "-Wunused-function"
+#pragma GCC diagnostic warning "-Wmissing-declarations"
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
+#endif
 
 /*
  *******************************************************************************
  * #defines
  *******************************************************************************
  */
-/* Switch on pedantic checking */
-#if defined ( __GNUC__ )
-#pragma GCC diagnostic push
-#pragma GCC diagnostic warning "-Wpedantic"
-#pragma GCC diagnostic warning "-Wextra"
-#endif
-
-/* DAC HW channels */
-#define DAC_CH_NR_0 (0U)
-
-#define DAC_CH_NR_1 (1U)
-
-/* DAC max value for signed configuration. DAC is 12 bit */
-#define DAC_MAX_VAL_I16 ((int16_t)((1 << 11) - 1))          /* 2.5V at output */
-#define DAC_MAX_VAL_F32 ((float32_t)DAC_MAX_VAL_I16)
-
-#define DAC_MIN_VAL_I16 ((int16_t)(-DAC_MAX_VAL_I16 - 1))   /* 0.3V at output */
-#define DAC_MIN_VAL_F32 ((float32_t)DAC_MIN_VAL_I16)
 
 /*
  *******************************************************************************
- * typedefs
+ * global variables
  *******************************************************************************
  */
 
 /*
  *******************************************************************************
- * globals
+ * local variables
  *******************************************************************************
  */
 
@@ -106,68 +83,48 @@
  * the function prototypes
  *******************************************************************************
  */
-#ifdef __cplusplus
-extern "C"
-{
-#endif
-__STATIC_FORCEINLINE void DAC_Ch0_Int16(int16_t val)
-{
-    val = val > DAC_MAX_VAL_I16 ? DAC_MAX_VAL_I16 : val;
-    val = val < DAC_MIN_VAL_I16 ? DAC_MIN_VAL_I16 : val;
 
-    XMC_DAC_CH_Write(XMC_DAC0, DAC_CH_NR_0, (uint16_t)(val & 0x0FFF));
-}
-
-__STATIC_FORCEINLINE void DAC_Ch0_PU_2_DAC(float32_t val)
-{
-    val *= DAC_MAX_VAL_F32;
-
-    val = val > DAC_MAX_VAL_F32 ? DAC_MAX_VAL_F32 : val;
-    val = val < DAC_MIN_VAL_F32 ? DAC_MIN_VAL_F32 : val;
-
-    XMC_DAC_CH_Write(XMC_DAC0, DAC_CH_NR_0, (uint16_t)((int16_t)val & 0x0FFF));
-}
-
-__STATIC_FORCEINLINE void DAC_Ch1_Int16(int16_t val)
-{
-    val = val > DAC_MAX_VAL_I16 ? DAC_MAX_VAL_I16 : val;
-    val = val < DAC_MIN_VAL_I16 ? DAC_MIN_VAL_I16 : val;
-
-    XMC_DAC_CH_Write(XMC_DAC0, DAC_CH_NR_1, (uint16_t)(val & 0x0FFF));
-}
-
-__STATIC_FORCEINLINE void DAC_Ch1_PU_2_DAC(float32_t val)
-{
-    val *= DAC_MAX_VAL_F32;
-
-    val = val > DAC_MAX_VAL_F32 ? DAC_MAX_VAL_F32 : val;
-    val = val < DAC_MIN_VAL_F32 ? DAC_MIN_VAL_F32 : val;
-
-    XMC_DAC_CH_Write(XMC_DAC0, DAC_CH_NR_1, (uint16_t)((int16_t)val & 0x0FFF));
-}
-
-/**
+/*
  *******************************************************************************
- * @brief Initialization function of DAC module
+ * the external functions
  *******************************************************************************
  */
-void DAC_Init(void);
 
+/*
+ *******************************************************************************
+ * the functions
+ *******************************************************************************
+ */
+void PIN_INTERRUPT_Init(const pin_interrupt_t * const handle)
+{
+    XMC_ASSERT("pin_interrupt_Init: pin_interrupt APP handle function pointer uninitialized", (handle != NULL));
+
+    /* Initializes input pin characteristics */
+    XMC_GPIO_Init(handle->port, handle->pin, &handle->gpio_config);
+    /* ERU Event Trigger Logic Hardware initialization based on UI */
+    XMC_ERU_ETL_Init(handle->eru, handle->etl, &handle->etl_config);
+    /* OGU is configured to generate event on configured trigger edge */
+    XMC_ERU_OGU_SetServiceRequestMode(handle->eru, handle->ogu, XMC_ERU_OGU_SERVICE_REQUEST_ON_TRIGGER);
+    #if (UC_FAMILY == XMC1)
+    /* Configure NVIC node and priority */
+    NVIC_SetPriority((IRQn_Type)handle->IRQn, handle->irq_priority);
+    #else
+    /* Configure NVIC node, priority and subpriority */
+    NVIC_SetPriority((IRQn_Type)handle->IRQn, NVIC_EncodePriority(NVIC_GetPriorityGrouping(),
+    handle->irq_priority, handle->irq_subpriority));
+    #endif
+    #if (UC_SERIES == XMC14)
+    XMC_SCU_SetInterruptControl((IRQn_Type)handle->IRQn, (XMC_SCU_IRQCTRL_t)handle->irqctrl);
+    #endif
+    if(true == handle->enable_at_init)
+    {
+        /* Clear pending interrupt before enabling it */
+        NVIC_ClearPendingIRQ((IRQn_Type)handle->IRQn);
+        /* Enable NVIC node */
+        NVIC_EnableIRQ((IRQn_Type)handle->IRQn);
+    }
+}
 /* Switch off pedantic checking */
 #if defined ( __GNUC__ )
 #pragma GCC diagnostic pop
 #endif
-
-#ifdef __cplusplus
-}
-#endif
-
-/**
- * @}
- */
-
-/**
- * @}
- */
-
-#endif /* end of DAC_H_ */

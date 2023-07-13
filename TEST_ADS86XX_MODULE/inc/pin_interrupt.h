@@ -1,16 +1,15 @@
 /**
  *******************************************************************************
- * @file    dac.h
+ * @file    pin_interrupt.h
  * @version 1.0.0
- * @date    2023-01-18
- * @brief   DAC functions
- * @author  Tomasz Osypinski<br>
- *
+ * @date    2023-01-27
+ * @brief   Pin interrupt utilities
+ * @author  Tomasz Osypinski
  *
  * Change History
  * --------------
  *
- * 2023-01-18:
+ * 2023-01-27:
  *      - Initial <br>
  *******************************************************************************
  */
@@ -42,16 +41,16 @@
  * SUCH DAMAGE.
  */
 
-#ifndef DAC_H_
-#define DAC_H_
+#ifndef PIN_INTERRUPT_H_
+#define PIN_INTERRUPT_H_
 
 /*
  *******************************************************************************
  * the includes
  *******************************************************************************
  */
-#include "type.h"
-#include <xmc_dac.h>
+#include <xmc_eru.h>
+#include <xmc_gpio.h>
 #include <xmc_common.h>
 
 /**
@@ -60,8 +59,8 @@
  */
 
 /**
- * @addtogroup DAC
- * @brief DAC functions
+ * @addtogroup Utility
+ * @brief Pin interrupt utilities
  * @{
  */
 
@@ -70,30 +69,35 @@
  * #defines
  *******************************************************************************
  */
-/* Switch on pedantic checking */
-#if defined ( __GNUC__ )
-#pragma GCC diagnostic push
-#pragma GCC diagnostic warning "-Wpedantic"
-#pragma GCC diagnostic warning "-Wextra"
-#endif
-
-/* DAC HW channels */
-#define DAC_CH_NR_0 (0U)
-
-#define DAC_CH_NR_1 (1U)
-
-/* DAC max value for signed configuration. DAC is 12 bit */
-#define DAC_MAX_VAL_I16 ((int16_t)((1 << 11) - 1))          /* 2.5V at output */
-#define DAC_MAX_VAL_F32 ((float32_t)DAC_MAX_VAL_I16)
-
-#define DAC_MIN_VAL_I16 ((int16_t)(-DAC_MAX_VAL_I16 - 1))   /* 0.3V at output */
-#define DAC_MIN_VAL_F32 ((float32_t)DAC_MIN_VAL_I16)
 
 /*
  *******************************************************************************
  * typedefs
  *******************************************************************************
  */
+/**
+ * @brief Configuration structure for pin_interrupt APP
+ */
+typedef struct pin_interrupt
+{
+    XMC_ERU_t *eru;                     /**< Mapped ERU module */
+    XMC_GPIO_PORT_t *port;              /**< Mapped port number */
+    XMC_GPIO_CONFIG_t gpio_config;      /**< Initializes the input pin characteristics */
+    XMC_ERU_ETL_CONFIG_t etl_config;    /**< reference to ERUx_ETLy (x = [0..1], y = [0..4])
+     module configuration */
+    #if (UC_SERIES == XMC14)
+    XMC_SCU_IRQCTRL_t irqctrl;          /**< selects the interrupt source for a NVIC interrupt node*/
+    #endif
+    IRQn_Type IRQn;                     /**< Mapped NVIC Node */
+    uint8_t irq_priority;               /**< Node Interrupt Priority */
+    #if (UC_FAMILY == XMC4)
+    uint8_t irq_subpriority;            /**< Node Interrupt SubPriority only valid for XMC4x */
+    #endif
+    uint8_t etl;                        /** < ETLx channel (x = [0..3])*/
+    uint8_t ogu;                        /** < OGUy channel (y = [0..3])*/
+    uint8_t pin;                        /** < Mapped pin number */
+    bool enable_at_init;                /**< Interrupt enable for Node at initialization*/
+} pin_interrupt_t;
 
 /*
  *******************************************************************************
@@ -110,54 +114,7 @@
 extern "C"
 {
 #endif
-__STATIC_FORCEINLINE void DAC_Ch0_Int16(int16_t val)
-{
-    val = val > DAC_MAX_VAL_I16 ? DAC_MAX_VAL_I16 : val;
-    val = val < DAC_MIN_VAL_I16 ? DAC_MIN_VAL_I16 : val;
-
-    XMC_DAC_CH_Write(XMC_DAC0, DAC_CH_NR_0, (uint16_t)(val & 0x0FFF));
-}
-
-__STATIC_FORCEINLINE void DAC_Ch0_PU_2_DAC(float32_t val)
-{
-    val *= DAC_MAX_VAL_F32;
-
-    val = val > DAC_MAX_VAL_F32 ? DAC_MAX_VAL_F32 : val;
-    val = val < DAC_MIN_VAL_F32 ? DAC_MIN_VAL_F32 : val;
-
-    XMC_DAC_CH_Write(XMC_DAC0, DAC_CH_NR_0, (uint16_t)((int16_t)val & 0x0FFF));
-}
-
-__STATIC_FORCEINLINE void DAC_Ch1_Int16(int16_t val)
-{
-    val = val > DAC_MAX_VAL_I16 ? DAC_MAX_VAL_I16 : val;
-    val = val < DAC_MIN_VAL_I16 ? DAC_MIN_VAL_I16 : val;
-
-    XMC_DAC_CH_Write(XMC_DAC0, DAC_CH_NR_1, (uint16_t)(val & 0x0FFF));
-}
-
-__STATIC_FORCEINLINE void DAC_Ch1_PU_2_DAC(float32_t val)
-{
-    val *= DAC_MAX_VAL_F32;
-
-    val = val > DAC_MAX_VAL_F32 ? DAC_MAX_VAL_F32 : val;
-    val = val < DAC_MIN_VAL_F32 ? DAC_MIN_VAL_F32 : val;
-
-    XMC_DAC_CH_Write(XMC_DAC0, DAC_CH_NR_1, (uint16_t)((int16_t)val & 0x0FFF));
-}
-
-/**
- *******************************************************************************
- * @brief Initialization function of DAC module
- *******************************************************************************
- */
-void DAC_Init(void);
-
-/* Switch off pedantic checking */
-#if defined ( __GNUC__ )
-#pragma GCC diagnostic pop
-#endif
-
+void PIN_INTERRUPT_Init(const pin_interrupt_t * const handle);
 #ifdef __cplusplus
 }
 #endif
@@ -170,4 +127,4 @@ void DAC_Init(void);
  * @}
  */
 
-#endif /* end of DAC_H_ */
+#endif /* end of PIN_INTERRUPT_H_ */

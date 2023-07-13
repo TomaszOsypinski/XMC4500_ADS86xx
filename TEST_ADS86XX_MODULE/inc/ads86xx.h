@@ -1,8 +1,8 @@
 /**
  *******************************************************************************
  * @file    ads86xx.h
- * @version 1.0.0
- * @date    2023-01-19
+ * @version 1.0.1
+ * @date    2023-03-22
  * @brief   Low level driver for ADS868x and ADS869x with XMC4500
  * @author  Tomasz Osypinski<br>
  *
@@ -10,8 +10,12 @@
  * Change History
  * --------------
  *
- * 2023-01-19:
+ * 2023-02-23:
  *      - Initial <br>
+ *
+ * 2023-02-23 v1.0.1:
+ *      - Optimization, added function ADS86XX_GetMeasure_PU,
+ *        Analog input configuration <br>
  *******************************************************************************
  */
 
@@ -51,6 +55,8 @@
  *******************************************************************************
  */
 #include "type.h"
+#include "common.h"
+#include <xmc_common.h>
 #include <stdint.h>
 #include <stdbool.h>
 
@@ -75,13 +81,13 @@
  * x = 1 = 1MSPS, 5 = 500kSPS, 9 = 100kSPS
  */
 #define ADS868x (0)
-#define ADS868X_DEV_NAME ("ADS868x")
+#define ADS868X_DEV_NAME "ADS868x"
 /**
  * 18-Bit HS SAR ADC
  * x = 1 = 1MSPS, 5 = 500kSPS, 9 = 100kSPS
  */
 #define ADS869x (1)
-#define ADS869X_DEV_NAME ("ADS869x")
+#define ADS869X_DEV_NAME "ADS869x"
 
 /**
  * ADS869x Sampling frequency in kHz
@@ -89,15 +95,28 @@
 #define ADS86_SAMPLING_FREQ  (40.0e3f)
 
 /**
+ * ADS869x Start sampling global = 1 or local = 0
+ */
+#define ADS86_SAMPLING_START_GLOBALY    (0)
+
+/**
  * Check parity on output data frames and ADC conversions enable/disable
  */
-#define ADS86_CHECK_PARITY_BITS_EN  (1)
+#define ADS86_CHECK_PARITY_BITS_EN      (1)
 
 /**
  * Put conversion result to DAC ch_0 output of XMC4500 enable/disable
  */
-#define ADS86_PUT_DATA_TO_DAC_EN  (1)
+#define ADS86_PUT_DATA_TO_DAC_EN        (1)
 
+/**
+ * Analog input configuration
+ */
+#define ADS86_ANALOG_IN_TYPE_BIPOLAR    (0)
+#define ADS86_ANALOG_IN_TYPE_UNIPOLAR   (1)
+#define ADS86_ANALOG_IN_TYPE            ADS86_ANALOG_IN_TYPE_BIPOLAR
+#define ADS86_ANALOG_IN_RANGE           ADS86_RANGE_SEL_BI_1_25_VREF
+#define ADS86_ANALOG_IN_MAX_VAL         (1.25f * ADS86_REF * 1.0e-6f)
 /**
  * Select device
  */
@@ -128,15 +147,15 @@
 
 #if     (ADS86_DEVICE_TYPE == ADS868x)
 #define ADS86_DEVICE_NAME       ADS868X_DEV_NAME
-#define ADS86_MIDDLE_CODE       ((int32_t)(0x8000))
-#define ADS86_MAX_VAL           ((int32_t)(0xFFFF))
+#define ADS86_MIDDLE_CODE       (0x8000)
+#define ADS86_MAX_VAL           (0xFFFF)
 #define ADS86_CONV_RESAULT_POS  (16)
 #define ADS86_MASK_CONV_RESAULT ((uint32_t)(0xFFFFUL << ADS86_CONV_RESAULT_POS))
 #define ADS86_MASK_OUTPUT_FLAGS ((uint32_t)0xFFFFUL)
 #elif   (ADS86_DEVICE_TYPE == ADS869x)
 #define ADS86_DEVICE_NAME       ADS869X_DEV_NAME
-#define ADS86_MIDDLE_CODE       ((int32_t)(0x20000))
-#define ADS86_MAX_VAL           ((int32_t)(0x3FFFF))
+#define ADS86_MIDDLE_CODE       (0x20000)
+#define ADS86_MAX_VAL           (0x3FFFF)
 #define ADS86_CONV_RESAULT_POS  (14)
 #define ADS86_MASK_CONV_RESAULT ((uint32_t)(0x3FFFFUL << ADS86_CONV_RESAULT_POS))
 #define ADS86_MASK_OUTPUT_FLAGS ((uint32_t)0x3FFFUL)
@@ -283,6 +302,48 @@ extern "C"
 #endif
 /**
  *******************************************************************************
+ * @brief   Convert ADS86XX bipolar measured data to PU <-1.0, 1.0)
+ * @param   Raw data from ADS86XX converter
+ * @return  PU value
+ *******************************************************************************
+ */
+COMMON_OPTIMIZE_FAST static inline
+float32_t ADS86XX_bipolar_2_pu(uint32_t val)
+{
+    /* Input signal for ADS86 is bipolar.
+     * <NFS = 0, PFS = ADS86_MAX_VAL>
+     * AIN_P - AIN_N = 0V = ADS86_MIDDLE_CODE
+     * Remove offset at middle scale and convert to per unit -1 to 1 */
+    val = val > ADS86_MAX_VAL ? ADS86_MAX_VAL : val;
+
+    float32_t tmp_pu =  (float32_t)((int32_t)val - ADS86_MIDDLE_CODE) * (1.0f / (float32_t)ADS86_MIDDLE_CODE);
+
+    return tmp_pu;
+}
+
+/**
+ *******************************************************************************
+ * @brief   Convert ADS86XX unipolar measured data to PU <0.0, 1.0)
+ * @param   Raw data from ADS86XX converter
+ * @return  PU value
+ *******************************************************************************
+ */
+COMMON_OPTIMIZE_FAST static inline
+float32_t ADS86XX_unipolar_2_pu(uint32_t val)
+{
+    /* Input signal for ADS86 is unipolar.
+     * <NFS = 0, PFS = ADS86_MAX_VAL>
+     * AIN_P - AIN_N = 0V = 0
+     * convert to per unit 0 to 1 */
+    val = val > ADS86_MAX_VAL ? ADS86_MAX_VAL : val;
+
+    float32_t tmp_pu =  (float32_t)val * (1.0f / (float32_t)ADS86_MAX_VAL);
+
+    return tmp_pu;
+}
+
+/**
+ *******************************************************************************
  * @brief   Initializes the ADS86xx channel
  * @param   in_range input voltage range.\n
  *          See: @ref ads86_range_sel_t
@@ -382,6 +443,15 @@ void ADS86XX_Start_ServiceInIsr(void);
  *******************************************************************************
  */
 void ADS86XX_ServiceInPolling(void);
+
+/**
+ *******************************************************************************
+ * @brief   Get ADC measurements in PU (per units)
+ * @return  Result of ADC conversion in (per units)
+ *******************************************************************************
+ */
+float32_t ADS86XX_GetMeasure_PU(void);
+
 #ifdef __cplusplus
 }
 #endif

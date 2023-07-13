@@ -1,6 +1,8 @@
 #ifndef SOS_COFF_H_
 #define SOS_COFF_H_
 
+#include "filter.h"
+
 #define SOS_COFF_NUM_OF_STAGES (2)
 
 static filter_iir_2_f32_t s0 = FILTER_IIR_2_INIT(

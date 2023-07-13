@@ -17,5 +17,10 @@
 
 - Small fixes
 
+## [1.0.4] - 2023-07-13
+
+- Updated ads86xx.c, ads86xx.h, dac.h, sos_coff.h and project file.
+- Added pin_interrupt.c, pin_interrupt.h, common.h
+
 ---
 Changelog written according to recommendations from https://keepachangelog.com/

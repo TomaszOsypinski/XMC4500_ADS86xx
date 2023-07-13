@@ -1,16 +1,15 @@
 /**
  *******************************************************************************
- * @file    dac.h
+ * @file    common.h
  * @version 1.0.0
- * @date    2023-01-18
- * @brief   DAC functions
- * @author  Tomasz Osypinski<br>
- *
+ * @date    2023-01-26
+ * @brief   Set of common macros and functions etc.
+ * @author  Tomasz Osypinski
  *
  * Change History
  * --------------
  *
- * 2023-01-18:
+ * 2023-01-26:
  *      - Initial <br>
  *******************************************************************************
  */
@@ -42,17 +41,14 @@
  * SUCH DAMAGE.
  */
 
-#ifndef DAC_H_
-#define DAC_H_
+#ifndef COMMON_H_
+#define COMMON_H_
 
 /*
  *******************************************************************************
  * the includes
  *******************************************************************************
  */
-#include "type.h"
-#include <xmc_dac.h>
-#include <xmc_common.h>
 
 /**
  * @addtogroup TEST_ADS86XX_MODULE
@@ -60,8 +56,8 @@
  */
 
 /**
- * @addtogroup DAC
- * @brief DAC functions
+ * @addtogroup Utility
+ * @brief Set of common macros and functions etc.
  * @{
  */
 
@@ -70,30 +66,43 @@
  * #defines
  *******************************************************************************
  */
-/* Switch on pedantic checking */
-#if defined ( __GNUC__ )
-#pragma GCC diagnostic push
-#pragma GCC diagnostic warning "-Wpedantic"
-#pragma GCC diagnostic warning "-Wextra"
-#endif
+/**
+ * Per Unit maximum vale
+ */
+#define COMMON_MAX_PU ( 1.0f)
 
-/* DAC HW channels */
-#define DAC_CH_NR_0 (0U)
+/**
+ * Per Unit minimum vale
+ */
+#define COMMON_MIN_PU (-1.0f)
 
-#define DAC_CH_NR_1 (1U)
+/**
+ * Saturation macro to max/min value
+ */
+#define COMMON_SAT(k, max, min)         \
+do {                                    \
+    (k) = (((k) > (max)) ? (max) : (k));\
+    (k) = (((k) < (min)) ? (min) : (k));\
+}while(0)
 
-/* DAC max value for signed configuration. DAC is 12 bit */
-#define DAC_MAX_VAL_I16 ((int16_t)((1 << 11) - 1))          /* 2.5V at output */
-#define DAC_MAX_VAL_F32 ((float32_t)DAC_MAX_VAL_I16)
-
-#define DAC_MIN_VAL_I16 ((int16_t)(-DAC_MAX_VAL_I16 - 1))   /* 0.3V at output */
-#define DAC_MIN_VAL_F32 ((float32_t)DAC_MIN_VAL_I16)
+/**
+ * GCC fast optimize atribute
+ */
+#define COMMON_OPTIMIZE_FAST __attribute__((optimize("Ofast")))
 
 /*
  *******************************************************************************
  * typedefs
  *******************************************************************************
  */
+/**
+ * Enumeric type of return function's status
+ */
+typedef enum common_status
+{
+    STATUS_SUCCESS = 0, /*!< Success */
+    STATUS_ERROR        /*!< Error */
+} common_status_t;
 
 /*
  *******************************************************************************
@@ -101,62 +110,17 @@
  *******************************************************************************
  */
 
+
 /*
  *******************************************************************************
  * the function prototypes
  *******************************************************************************
  */
 #ifdef __cplusplus
-extern "C"
-{
+extern "C" {
 #endif
-__STATIC_FORCEINLINE void DAC_Ch0_Int16(int16_t val)
-{
-    val = val > DAC_MAX_VAL_I16 ? DAC_MAX_VAL_I16 : val;
-    val = val < DAC_MIN_VAL_I16 ? DAC_MIN_VAL_I16 : val;
 
-    XMC_DAC_CH_Write(XMC_DAC0, DAC_CH_NR_0, (uint16_t)(val & 0x0FFF));
-}
 
-__STATIC_FORCEINLINE void DAC_Ch0_PU_2_DAC(float32_t val)
-{
-    val *= DAC_MAX_VAL_F32;
-
-    val = val > DAC_MAX_VAL_F32 ? DAC_MAX_VAL_F32 : val;
-    val = val < DAC_MIN_VAL_F32 ? DAC_MIN_VAL_F32 : val;
-
-    XMC_DAC_CH_Write(XMC_DAC0, DAC_CH_NR_0, (uint16_t)((int16_t)val & 0x0FFF));
-}
-
-__STATIC_FORCEINLINE void DAC_Ch1_Int16(int16_t val)
-{
-    val = val > DAC_MAX_VAL_I16 ? DAC_MAX_VAL_I16 : val;
-    val = val < DAC_MIN_VAL_I16 ? DAC_MIN_VAL_I16 : val;
-
-    XMC_DAC_CH_Write(XMC_DAC0, DAC_CH_NR_1, (uint16_t)(val & 0x0FFF));
-}
-
-__STATIC_FORCEINLINE void DAC_Ch1_PU_2_DAC(float32_t val)
-{
-    val *= DAC_MAX_VAL_F32;
-
-    val = val > DAC_MAX_VAL_F32 ? DAC_MAX_VAL_F32 : val;
-    val = val < DAC_MIN_VAL_F32 ? DAC_MIN_VAL_F32 : val;
-
-    XMC_DAC_CH_Write(XMC_DAC0, DAC_CH_NR_1, (uint16_t)((int16_t)val & 0x0FFF));
-}
-
-/**
- *******************************************************************************
- * @brief Initialization function of DAC module
- *******************************************************************************
- */
-void DAC_Init(void);
-
-/* Switch off pedantic checking */
-#if defined ( __GNUC__ )
-#pragma GCC diagnostic pop
-#endif
 
 #ifdef __cplusplus
 }
@@ -170,4 +134,4 @@ void DAC_Init(void);
  * @}
  */
 
-#endif /* end of DAC_H_ */
+#endif /* end of COMMON_H_ */

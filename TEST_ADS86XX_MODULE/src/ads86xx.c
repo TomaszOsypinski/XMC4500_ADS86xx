@@ -1,8 +1,8 @@
 /**
  *******************************************************************************
  * @file    ads86xx.c
- * @version 1.0.0
- * @date    2023-01-19
+ * @version 1.0.1
+ * @date    2023-03-22
  * @brief   Low level driver for ADS868x and ADS869x with XMC4500
  * @author  Tomasz Osypinski<br>
  *
@@ -10,8 +10,11 @@
  * Change History
  * --------------
  *
- * 2023-01-19:
+ * 2023-02-23:
  *      - Initial <br>
+ *
+ * 2023-02-23:
+ *      - Optimization, added adsMeasure_pu,  <br>
  *******************************************************************************
  */
 
@@ -48,14 +51,19 @@
  *******************************************************************************
  */
 #include "ads86xx.h"
+#include "common.h"
 #include "dac.h"
 #include "test_assert.h"
-#include "filter.h"
+#include "pin_interrupt.h"
+
+#define ADS86_SOS_FILTER_EN (1)
+
+#if ADS86_SOS_FILTER_EN
+#include "sos_coff.h"
+#endif
 
 #include <xmc_spi.h>
-#include <xmc_eru.h>
 #include <xmc_ccu8.h>
-#include <xmc_gpio.h>
 
 #ifdef PRINT_INFO
 #include <stdio.h>
@@ -68,6 +76,7 @@
 #pragma GCC diagnostic warning "-Wall"
 #pragma GCC diagnostic warning "-Wextra"
 #pragma GCC diagnostic warning "-Wconversion"
+#pragma GCC diagnostic warning "-Wunused-function"
 #pragma GCC diagnostic warning "-Wmissing-declarations"
 #pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 #endif
@@ -113,7 +122,7 @@
 
 #define ADS86_Sampling_Isr               IRQ_Hdlr_64
 #define ADS86_SAMPLING_Isr_Type          CCU81_0_IRQn
-#define ADS86_SAMPLING_Isr_Priority      (1)
+#define ADS86_SAMPLING_Isr_Priority      (2)
 #define ADS86_SAMPLING_Isr_Subpririty    (0)
 
 #define ADS86_RVS_PIN_Isr                IRQ_Hdlr_1
@@ -123,12 +132,12 @@
 
 #define ADS86_RxFifo_Isr                 IRQ_Hdlr_90
 #define ADS86_RXFIFO_Isr_Type            USIC1_0_IRQn
-#define ADS86_RXFIFO_Isr_Priority        (3)
+#define ADS86_RXFIFO_Isr_Priority        (2)
 #define ADS86_RXFIFO_Isr_Subpririty      (0)
 
 #define ADS86_ALARM_PIN_Isr              IRQ_Hdlr_2
 #define ADS86_ALARM_PIN_Isr_Type         ERU0_1_IRQn
-#define ADS86_ALARM_PIN_Isr_Priority     (62)
+#define ADS86_ALARM_PIN_Isr_Priority     (63)
 #define ADS86_ALARM_PIN_Isr_Subpririty   (0)
 
 /*
@@ -136,29 +145,6 @@
  * local typedefs
  *******************************************************************************
  */
-/**
- * @brief Configuration structure for pin_interrupt APP
- */
-typedef struct pin_interrupt
-{
-    XMC_ERU_t *eru;                     /**< Mapped ERU module */
-    XMC_GPIO_PORT_t *port;              /**< Mapped port number */
-    XMC_GPIO_CONFIG_t gpio_config;      /**< Initializes the input pin characteristics */
-    XMC_ERU_ETL_CONFIG_t etl_config;    /**< reference to ERUx_ETLy (x = [0..1], y = [0..4])
-     module configuration */
-    #if (UC_SERIES == XMC14)
-    XMC_SCU_IRQCTRL_t irqctrl;          /**< selects the interrupt source for a NVIC interrupt node*/
-    #endif
-    IRQn_Type IRQn;                     /**< Mapped NVIC Node */
-    uint8_t irq_priority;               /**< Node Interrupt Priority */
-    #if (UC_FAMILY == XMC4)
-    uint8_t irq_subpriority;            /**< Node Interrupt SubPriority only valid for XMC4x */
-    #endif
-    uint8_t etl;                        /** < ETLx channel (x = [0..3])*/
-    uint8_t ogu;                        /** < OGUy channel (y = [0..3])*/
-    uint8_t pin;                        /** < Mapped pin number */
-    bool enable_at_init;                /**< Interrupt enable for Node at initialization*/
-} pin_interrupt_t;
 
 /*
  *******************************************************************************
@@ -193,6 +179,11 @@ static volatile uint16_t adsAlarmsReg  = 0U;
  */
 static volatile uint32_t adsOutputData = 0UL;
 
+/**
+ * Measured value in PU (per units)
+ */
+static volatile float32_t adsMeasure_pu = 0.0f;
+
 /* Form http://www.graphics.stanford.edu/~seander/bithacks.html#ParityLookupTable */
 static const bool parityTable256[256] =
 {
@@ -213,7 +204,6 @@ void ADS86_Sampling_Isr(void);
 void ADS86_RVS_PIN_Isr(void);
 void ADS86_RxFifo_Isr(void);
 void ADS86_ALARM_PIN_Isr(void);
-
 /*
  *******************************************************************************
  * the external functions
@@ -225,10 +215,9 @@ void ADS86_ALARM_PIN_Isr(void);
  * the functions
  *******************************************************************************
  */
+#if ADS86_SOS_FILTER_EN
 __STATIC_FORCEINLINE float32_t iir_sos(const float32_t in)
 {
-    #include "./filter_py/sos_coff.h"
-
     s[0]->x[0] = in;
 
     uint32_t i = 0U;
@@ -248,6 +237,7 @@ __STATIC_FORCEINLINE float32_t iir_sos(const float32_t in)
 
     return s[SOS_COFF_NUM_OF_STAGES - 1]->output;
 }
+#endif
 
 static void ads86_spi_init(void)
 {
@@ -350,57 +340,19 @@ static uint32_t ads86_send_cmd(const uint8_t op,
         i--;
     } while(i >= 0);
     #elif (ADS86_SPI_WORD_SIZE == ADS86_SPI_WORD_WORD)
-    /* Tx data */
-    int32_t i = 1; /* Index 1 is MSB  */
-    do
-    {
-        XMC_USIC_CH_TXFIFO_PutData(ADS86_SPI, tx_frame.Data_U16[i]);
-        i--;
-    } while(i >= 0);
+    /* Tx data, Index 1 is MSB */
+    XMC_USIC_CH_TXFIFO_PutData(ADS86_SPI, tx_frame.Data_U16[1]);
+    XMC_USIC_CH_TXFIFO_PutData(ADS86_SPI, tx_frame.Data_U16[0]);
 
-    /* RX data */
+    /* RX data, Index 1 is MSB */
     while(!XMC_USIC_CH_RXFIFO_IsFull(ADS86_SPI));
-    i = 1; /* Index 3 is MSB  */
-    do
-    {
-        rx_frame.Data_U16[i] = (uint16_t)XMC_USIC_CH_RXFIFO_GetData(ADS86_SPI);
-        i--;
-    } while(i >= 0);
+    rx_frame.Data_U16[1] = (uint16_t)XMC_USIC_CH_RXFIFO_GetData(ADS86_SPI);
+    rx_frame.Data_U16[0] = (uint16_t)XMC_USIC_CH_RXFIFO_GetData(ADS86_SPI);
     #else
     #error "Define SPI WORD size!!!"
     #endif
 
     return rx_frame.Data_U32;
-}
-
-static void pin_interrupt_init(const pin_interrupt_t * const handle)
-{
-    XMC_ASSERT("pin_interrupt_Init: pin_interrupt APP handle function pointer uninitialized", (handle != NULL));
-
-    /* Initializes input pin characteristics */
-    XMC_GPIO_Init(handle->port, handle->pin, &handle->gpio_config);
-    /* ERU Event Trigger Logic Hardware initialization based on UI */
-    XMC_ERU_ETL_Init(handle->eru, handle->etl, &handle->etl_config);
-    /* OGU is configured to generate event on configured trigger edge */
-    XMC_ERU_OGU_SetServiceRequestMode(handle->eru, handle->ogu, XMC_ERU_OGU_SERVICE_REQUEST_ON_TRIGGER);
-    #if (UC_FAMILY == XMC1)
-    /* Configure NVIC node and priority */
-    NVIC_SetPriority((IRQn_Type)handle->IRQn, handle->irq_priority);
-    #else
-    /* Configure NVIC node, priority and subpriority */
-    NVIC_SetPriority((IRQn_Type)handle->IRQn, NVIC_EncodePriority(NVIC_GetPriorityGrouping(),
-    handle->irq_priority, handle->irq_subpriority));
-    #endif
-    #if (UC_SERIES == XMC14)
-    XMC_SCU_SetInterruptControl((IRQn_Type)handle->IRQn, (XMC_SCU_IRQCTRL_t)handle->irqctrl);
-    #endif
-    if(true == handle->enable_at_init)
-    {
-        /* Clear pending interrupt before enabling it */
-        NVIC_ClearPendingIRQ((IRQn_Type)handle->IRQn);
-        /* Enable NVIC node */
-        NVIC_EnableIRQ((IRQn_Type)handle->IRQn);
-    }
 }
 
 static void ads_alarm_pin_init(void)
@@ -433,7 +385,7 @@ static void ads_alarm_pin_init(void)
         .enable_at_init = true
     };
 
-    pin_interrupt_init(&config_pin_alarm);
+    PIN_INTERRUPT_Init(&config_pin_alarm);
 
     /* force to read alarm register if ALARM pin is HI */
     readAdsAlarms = (bool)XMC_GPIO_GetInput(ADS86_ALARM_PORT, ADS86_ALARM_PIN);
@@ -470,7 +422,7 @@ static void ads_rvs_pin_init(void)
        .enable_at_init = true
      };
 
-    pin_interrupt_init(&config_pin_rvs);
+    PIN_INTERRUPT_Init(&config_pin_rvs);
 }
 
 static void ads_reconfig_pin_cs_to_convst(void)
@@ -549,6 +501,15 @@ static void sampling_timer_init(void)
       .timer_concatenation = (uint32_t) 0
     };
 
+    const XMC_CCU8_SLICE_EVENT_CONFIG_t cfg_event0_config =
+         {
+            .mapped_input        = XMC_CCU8_SLICE_INPUT_H,
+            .edge                = XMC_CCU8_SLICE_EVENT_EDGE_SENSITIVITY_RISING_EDGE,
+            .level               = XMC_CCU8_SLICE_EVENT_LEVEL_SENSITIVITY_ACTIVE_LOW,
+            .duration            = XMC_CCU8_SLICE_EVENT_FILTER_DISABLED,
+         };
+
+
     XMC_ASSERT("To small ADS86_SAMPLING_FREQ!!!",
               (ADS86_SAMPLING_CCU8_CLK_FREQ / ADS86_SAMPLING_FREQ < (float32_t)UINT16_MAX));
 
@@ -560,6 +521,9 @@ static void sampling_timer_init(void)
     XMC_CCU8_SLICE_SetInterruptNode(ADS86_SAMPLING_CCU8_SLICE_PTR, XMC_CCU8_SLICE_IRQ_ID_PERIOD_MATCH, XMC_CCU8_SLICE_SR_ID_0);
     XMC_CCU8_EnableShadowTransfer(ADS86_SAMPLING_CCU8_MODULE_PTR, (uint32_t)XMC_CCU8_SHADOW_TRANSFER_SLICE_0);
 
+    XMC_CCU8_SLICE_ConfigureEvent(ADS86_SAMPLING_CCU8_SLICE_PTR, XMC_CCU8_SLICE_EVENT_0, &cfg_event0_config);
+    XMC_CCU8_SLICE_StartConfig(ADS86_SAMPLING_CCU8_SLICE_PTR, XMC_CCU8_SLICE_EVENT_0, XMC_CCU8_SLICE_START_MODE_TIMER_START_CLEAR);
+
     NVIC_SetPriority(ADS86_SAMPLING_Isr_Type,
                      NVIC_EncodePriority(NVIC_GetPriorityGrouping(),
                      ADS86_SAMPLING_Isr_Priority,
@@ -567,21 +531,27 @@ static void sampling_timer_init(void)
 
     NVIC_EnableIRQ(ADS86_SAMPLING_Isr_Type);
 
-    /* Start the CCU8 timer */
-    XMC_CCU8_SLICE_ClearTimer(ADS86_SAMPLING_CCU8_SLICE_PTR);
+    /* Start the CCU81_0 timer */
     XMC_CCU8_EnableClock(ADS86_SAMPLING_CCU8_MODULE_PTR, ADS86_SAMPLING_CCU8_SLICE_NUMBER);
+    /* Check clocks */
+    do { } while(((ADS86_SAMPLING_CCU8_MODULE_PTR->GSTAT & CCU8_GSTAT_S0I_Msk) != 0UL));
+
+    XMC_CCU8_SLICE_StopClearTimer(ADS86_SAMPLING_CCU8_SLICE_PTR);
+
+    #if (ADS86_SAMPLING_START_GLOBALY == 0)
     XMC_CCU8_SLICE_StartTimer(ADS86_SAMPLING_CCU8_SLICE_PTR);
+    #endif
 }
 
 /* Conversion start */
-__STATIC_INLINE void ads_conv_start(void)
+__STATIC_FORCEINLINE void ads_conv_start(void)
 {
     /* Rising edge force conversion */
     XMC_GPIO_SetOutputHigh(ADS86_SPI_CS);
 }
 
 /* Acquisition start */
-__STATIC_INLINE void ads_acq_start(void)
+__STATIC_FORCEINLINE void ads_acq_start(void)
 {
     /* Falling edge force acquisition */
     XMC_GPIO_SetOutputLow(ADS86_SPI_CS);
@@ -589,7 +559,8 @@ __STATIC_INLINE void ads_acq_start(void)
 
 #if (ADS86_CHECK_PARITY_BITS_EN == 1)
 /* true if parity OK, otherwise false */
-__STATIC_INLINE bool checkParity(const uint32_t data)
+COMMON_OPTIMIZE_FAST static inline
+bool checkParity(const uint32_t data)
 {
     ads86_output_data_t calc_par;
 
@@ -666,7 +637,7 @@ static const char * getStringRange(const ads86_range_sel_t range)
  * @return  None
  *******************************************************************************
  */
-void ADS86_Sampling_Isr(void)
+COMMON_OPTIMIZE_FAST void ADS86_Sampling_Isr(void)
 {
     ads_conv_start();
 }
@@ -679,7 +650,7 @@ void ADS86_Sampling_Isr(void)
  * @return  None
  *******************************************************************************
  */
-void ADS86_RVS_PIN_Isr(void)
+COMMON_OPTIMIZE_FAST void ADS86_RVS_PIN_Isr(void)
 {
     /* Go to accusation and get data */
     ads_acq_start();
@@ -693,13 +664,9 @@ void ADS86_RVS_PIN_Isr(void)
         i--;
     } while(i >= 0);
     #elif (ADS86_SPI_WORD_SIZE == ADS86_SPI_WORD_WORD)
-    register int32_t i = 1; /* Index 1 is MSB  */
     /* Tx data */
-    do
-    {
-        XMC_USIC_CH_TXFIFO_PutData(ADS86_SPI, 0);
-        i--;
-    } while(i >= 0);
+    XMC_USIC_CH_TXFIFO_PutData(ADS86_SPI, 0);
+    XMC_USIC_CH_TXFIFO_PutData(ADS86_SPI, 0);
     #else
     #error "Define SPI WORD size!!!"
     #endif
@@ -712,46 +679,43 @@ void ADS86_RVS_PIN_Isr(void)
  * @return  None
  *******************************************************************************
  */
-void ADS86_RxFifo_Isr(void)
+COMMON_OPTIMIZE_FAST void ADS86_RxFifo_Isr(void)
 {
     ads86_ctrl_frame_t rx_frame;
-    register int32_t i;
+
     #if (ADS86_SPI_WORD_SIZE == ADS86_SPI_WORD_BYTE)
-    i = 3;  /* Index 3 is MSB  */
+    register int32_t i = 3; /* Index 3 is MSB  */
     do
     {
         rx_frame.Data_U8[i] = (uint8_t)XMC_USIC_CH_RXFIFO_GetData(ADS86_SPI);
         i--;
     } while(i >= 0);
-
-
-
     #elif (ADS86_SPI_WORD_SIZE == ADS86_SPI_WORD_WORD)
-    i = 1;  /* Index 1 is MSB  */
-    do
-    {
-        rx_frame.Data_U16[i] = (uint16_t)XMC_USIC_CH_RXFIFO_GetData(ADS86_SPI);
-        i--;
-    } while(i >= 0);
-
+    /* Index 1 is MSB  */
+    rx_frame.Data_U16[1] = (uint16_t)XMC_USIC_CH_RXFIFO_GetData(ADS86_SPI);
+    rx_frame.Data_U16[0] = (uint16_t)XMC_USIC_CH_RXFIFO_GetData(ADS86_SPI);
     #else
     #error "Define SPI WORD size!!!"
     #endif
 
+    #if   (ADS86_ANALOG_IN_TYPE == ADS86_ANALOG_IN_TYPE_BIPOLAR)
+    const float32_t tmp_pu = ADS86XX_bipolar_2_pu(rx_frame.Data_U32 >> ADS86_CONV_RESAULT_POS);
+    #elif (ADS86_ANALOG_IN_TYPE == ADS86_ANALOG_IN_TYPE_UNIPOLAR)
+    float32_t tmp_pu = ADS86XX_unipolar_2_pu(rx_frame.Data_U32 >> ADS86_CONV_RESAULT_POS);
+    #else
+    #error "ADS86_ANALOG_IN_TYPE wrong configuration!!!"
+    #endif
+
+    /* Update global variable */
+    adsMeasure_pu = tmp_pu;
     adsOutputData = rx_frame.Data_U32;
 
     #if (ADS86_PUT_DATA_TO_DAC_EN == 1)
-    /* Update DAC
-     * Input signal for ADS86 is bipolar, conversion result is unipolar so
-     * remove offset at middle scale (-0.5) is necessary.
-     * Conversion to per unit */
-    float32_t dac_ch0 = ((float32_t)(rx_frame.Data_U32 >> ADS86_CONV_RESAULT_POS) / (float32_t)ADS86_MAX_VAL) - 0.5f;
-
-    /* Apply filter */
-    float32_t dac_ch1 = iir_sos(dac_ch0);
-
-    DAC_Ch0_PU_2_DAC(dac_ch0);
-    DAC_Ch1_PU_2_DAC(dac_ch1);
+    DAC_Ch0_PU_2_DAC(tmp_pu);
+    #endif
+    
+    #if ADS86_SOS_FILTER_EN
+    DAC_Ch1_PU_2_DAC(iir_sos(tmp_pu));
     #endif
 }
 
@@ -762,13 +726,15 @@ void ADS86_RxFifo_Isr(void)
  * @return  None
  *******************************************************************************
  */
-void ADS86_ALARM_PIN_Isr(void)
+COMMON_OPTIMIZE_FAST void ADS86_ALARM_PIN_Isr(void)
 {
     readAdsAlarms = true;
 }
 
 void ADS86XX_Init(const ads86_range_sel_t in_range)
 {
+    uint32_t ret_data;
+
     ads86_spi_init();
 
     /* Set input range */
@@ -778,10 +744,11 @@ void ADS86XX_Init(const ads86_range_sel_t in_range)
 
     /* get RANGE_SEL_REG */
     ads86_send_cmd(ADS86_CMD_READ_HWORD, ADS86_RANGE_SEL_REG, 0U);
-    uint32_t ret_data = ads86_send_cmd(ADS86_CMD_NOP, 0U, 0U);
     #ifdef PRINT_INFO
+    ret_data = ads86_send_cmd(ADS86_CMD_NOP, 0U, 0U);
+    printf("\n\n%s", ADS86_DEVICE_NAME " Init ...");
     const ads86_range_sel_t range = (ads86_range_sel_t)((uint16_t)(ret_data >> 16) & 0xFU);
-    printf("\nADS86_RANGE_SEL_REG = %s\n",  getStringRange(range));
+    printf("\n%-32s : %s", "ADS86_RANGE_SEL_REG", getStringRange(range));
     #endif
 
     /* Set all flags in output data */
@@ -799,11 +766,11 @@ void ADS86XX_Init(const ads86_range_sel_t in_range)
 
     /* get ADS86_DATAOUT_CTL_REG */
     ads86_send_cmd(ADS86_CMD_READ_HWORD, ADS86_DATAOUT_CTL_REG, 0U);
-    ret_data = ads86_send_cmd(ADS86_CMD_NOP, 0U, 0U);
     #ifdef PRINT_INFO
+    ret_data = ads86_send_cmd(ADS86_CMD_NOP, 0U, 0U);
     ctl_reg.Data_U16 = 0U;
     ctl_reg.Data_U16 = (uint16_t)(ret_data >> 16);
-    printf("ADS86_DATAOUT_CTL_REG = 0x%.4X\n",  ctl_reg.Data_U16);
+    printf("\n%-32s : 0x%.4X", "ADS86_DATAOUT_CTL_REG", ctl_reg.Data_U16);
     #endif
 
     /* configure SDO_1 as ALARM output */
@@ -815,7 +782,7 @@ void ADS86XX_Init(const ads86_range_sel_t in_range)
     /* Only lower words is occupied by alarm flags */
     adsAlarmsReg |= (uint16_t)(ret_data >> 16);
     #ifdef PRINT_INFO
-    printf("ADS86_ALARM_REG = 0x%.4X\n",  adsAlarmsReg);
+    printf("\n%-32s : 0x%.4X", "ADS86_ALARM_REG", adsAlarmsReg);
     #endif
 
     /* Initializes ISR for ALARM pin */
@@ -835,7 +802,7 @@ uint32_t ADS86XX_GetOutputData(void)
 {
     #if (ADS86_CHECK_PARITY_BITS_EN == 1)
     uint32_t tmp_u32 = adsOutputData;
-    tmp_u32 = checkParity(tmp_u32) ? tmp_u32 : 0xFFFFFFFFUL;
+    tmp_u32 = checkParity(tmp_u32) ? tmp_u32 : UINT32_MAX;
     #else
     uint32_t tmp_u32 = adsOutputData;
     #endif
@@ -849,7 +816,7 @@ int32_t ADS86XX_GetResault_I32(void)
 
     #if (ADS86_CHECK_PARITY_BITS_EN == 1)
     data.Data_U32 = adsOutputData;
-    data.Data_U32 = checkParity(data.Data_U32) ? data.Data_U32 : 0xFFFFFFFFUL;
+    data.Data_U32 = checkParity(data.Data_U32) ? data.Data_U32 : UINT32_MAX;
     #else
     data.Data_U32 = adsOutputData;
     #endif
@@ -932,39 +899,39 @@ float32_t ADS86XX_GetMeasure_uV(void)
     {
         case ADS86_RANGE_SEL_BI_3_VREF:
             tmp_i32 = (int32_t)data.ConvResult - ADS86_MIDDLE_CODE;
-            ret_val = ((float32_t)tmp_i32 / (float32_t)ADS86_MAX_VAL) * (2.0f * 3.0f * ADS86_REF);
+            ret_val = ((float32_t)tmp_i32 * (1.0f / (float32_t)ADS86_MIDDLE_CODE)) * (3.0f * ADS86_REF);
             break;
         case ADS86_RANGE_SEL_BI_2_5_VREF:
             tmp_i32 = (int32_t)data.ConvResult - ADS86_MIDDLE_CODE;
-            ret_val = ((float32_t)tmp_i32 / (float32_t)ADS86_MAX_VAL) * (2.0f * 2.5f * ADS86_REF);
+            ret_val = ((float32_t)tmp_i32 * (1.0f / (float32_t)ADS86_MIDDLE_CODE)) * (2.5f * ADS86_REF);
             break;
         case ADS86_RANGE_SEL_BI_1_5_VREF:
             tmp_i32 = (int32_t)data.ConvResult - ADS86_MIDDLE_CODE;
-            ret_val = ((float32_t)tmp_i32 / (float32_t)ADS86_MAX_VAL) * (2.0f * 1.5f * ADS86_REF);
+            ret_val = ((float32_t)tmp_i32 * (1.0f / (float32_t)ADS86_MIDDLE_CODE)) * (1.5f * ADS86_REF);
             break;
         case ADS86_RANGE_SEL_BI_1_25_VREF:
             tmp_i32 = (int32_t)data.ConvResult - ADS86_MIDDLE_CODE;
-            ret_val = ((float32_t)tmp_i32 / (float32_t)ADS86_MAX_VAL) * (2.0f * 1.25f * ADS86_REF);
+            ret_val = ((float32_t)tmp_i32 * (1.0f / (float32_t)ADS86_MIDDLE_CODE)) * (1.25f * ADS86_REF);
             break;
         case ADS86_RANGE_SEL_BI_0_625_VREF:
             tmp_i32 = (int32_t)data.ConvResult - ADS86_MIDDLE_CODE;
-            ret_val = ((float32_t)tmp_i32 / (float32_t)ADS86_MAX_VAL) * (2.0f * 0.625f * ADS86_REF);
+            ret_val = ((float32_t)tmp_i32 * (1.0f / (float32_t)ADS86_MIDDLE_CODE)) * (0.625f * ADS86_REF);
             break;
         case ADS86_RANGE_SEL_UNI_3_VREF:
             tmp_i32 = (int32_t)data.ConvResult;
-            ret_val = ((float32_t)tmp_i32 / (float32_t)ADS86_MAX_VAL) * (3.0f * ADS86_REF);
+            ret_val = ((float32_t)tmp_i32 * (1.0f / (float32_t)ADS86_MAX_VAL)) * (3.0f * ADS86_REF);
             break;
         case ADS86_RANGE_SEL_UNI_2_5_VREF:
             tmp_i32 = (int32_t)data.ConvResult;
-            ret_val = ((float32_t)tmp_i32 / (float32_t)ADS86_MAX_VAL) * (2.5f * ADS86_REF);
+            ret_val = ((float32_t)tmp_i32 * (1.0f / (float32_t)ADS86_MAX_VAL)) * (2.5f * ADS86_REF);
             break;
         case ADS86_RANGE_SEL_UNI_1_5_VREF:
             tmp_i32 = (int32_t)data.ConvResult;
-            ret_val = ((float32_t)tmp_i32 / (float32_t)ADS86_MAX_VAL) * (1.5f * ADS86_REF);
+            ret_val = ((float32_t)tmp_i32 * (1.0f / (float32_t)ADS86_MAX_VAL)) * (1.5f * ADS86_REF);
             break;
         case ADS86_RANGE_SEL_UNI_1_25_VREF:
             tmp_i32 = (int32_t)data.ConvResult;
-            ret_val = ((float32_t)tmp_i32 / (float32_t)ADS86_MAX_VAL) * (1.25f * ADS86_REF);
+            ret_val = ((float32_t)tmp_i32 * (1.0f / (float32_t)ADS86_MAX_VAL)) * (1.25f * ADS86_REF);
             break;
         default:
             break;
@@ -984,28 +951,28 @@ void ADS86XX_PrintInfo(void)
     out_info.Data_U32   = ADS86XX_GetOutputDataFlags();
     alarms.Data_U16     = ADS86XX_GetAlarmsReg();
 
-    printf("\nChannel %s = %ld [uV]\n", ADS86_DEVICE_NAME, (long int)in_mv);
-    printf("Raw data = 0x%.8lX\n", output_raw);
+    printf("\n\n%s", ADS86_DEVICE_NAME " Service ...");
+    printf("\n%-32s : %ld [uV]", "Input voltage", (long int)in_mv);
+    printf("\n%-32s : 0x%.8lX",  "Raw data", (unsigned long)output_raw);
 
-    printf("\n*** Output info ***\n");
-    printf("Raw Out Info = 0x%.4X\n",  (uint16_t)out_info.Data_U32);
-    printf("InputAlarmFlags : 0x%.1X\n", out_info.InputAlarmFlags);
-    printf("AvddAlarmFlags  : 0x%.1X\n", out_info.AvddAlarmFlags);
-    printf("AdcInputRange   : 0x%.1X\n", out_info.AdcInputRange);
-    printf("DeviceAddress   : 0x%.1X\n", out_info.DeviceAddress);
+    printf("\n%-32s : 0x%.4X", "Raw Out Info", (uint16_t)out_info.Data_U32);
+    printf("\n%-32s : 0x%.1X", "InputAlarmFlags", out_info.InputAlarmFlags);
+    printf("\n%-32s : 0x%.1X", "AvddAlarmFlags",  out_info.AvddAlarmFlags);
+    printf("\n%-32s : 0x%.1X", "AdcInputRange",   out_info.AdcInputRange);
+    printf("\n%-32s : 0x%.1X", "DeviceAddress",   out_info.DeviceAddress);
 
     if(alarms.Data_U16 != 0U)
     {
-        printf("\n*** Alarms ***\n");
-        printf("OVW_ALARM       : %u\n", alarms.OVW_ALARM);
-        printf("TRIP_IN_H       : %u\n", alarms.TRIP_IN_H);
-        printf("TRIP_IN_L       : %u\n", alarms.TRIP_IN_L);
-        printf("TRIP_VDD_H      : %u\n", alarms.TRIP_VDD_H);
-        printf("TRIP_VDD_L      : %u\n", alarms.TRIP_VDD_L);
-        printf("ACTIVE_IN_H     : %u\n", alarms.ACTIVE_IN_H);
-        printf("ACTIVE_IN_L     : %u\n", alarms.ACTIVE_IN_L);
-        printf("ACTIVE_VDD_H    : %u\n", alarms.ACTIVE_VDD_H);
-        printf("ACTIVE_VDD_L    : %u\n", alarms.ACTIVE_VDD_L);
+        printf("\n%-32s : %u", "OVW_ALARM",    alarms.OVW_ALARM);
+        printf("\n%-32s : %u", "TRIP_IN_H",    alarms.TRIP_IN_H);
+        printf("\n%-32s : %u", "TRIP_IN_L",    alarms.TRIP_IN_L);
+        printf("\n%-32s : %u", "TRIP_VDD_H",   alarms.TRIP_VDD_H);
+        printf("\n%-32s : %u", "TRIP_VDD_L",   alarms.TRIP_VDD_L);
+        printf("\n%-32s : %u", "ACTIVE_IN_H",  alarms.ACTIVE_IN_H);
+        printf("\n%-32s : %u", "ACTIVE_IN_L",  alarms.ACTIVE_IN_L);
+        printf("\n%-32s : %u", "ACTIVE_VDD_H", alarms.ACTIVE_VDD_H);
+        printf("\n%-32s : %u", "ACTIVE_VDD_L", alarms.ACTIVE_VDD_L);
+        printf("\n%-32s : %u", "OVW_ALARM",    alarms.OVW_ALARM);
     }
     #endif
 }
@@ -1032,7 +999,7 @@ void ADS86XX_Start_ServiceInPolling(void)
         ads_acq_start();
 
         #ifdef PRINT_INFO
-        printf("\n******** Goto polling mode... ********\n");
+        printf("\nGoto polling mode...\n");
         #endif
     }
 }
@@ -1049,6 +1016,9 @@ void ADS86XX_Start_ServiceInIsr(void)
         XMC_USIC_CH_RXFIFO_ClearEvent(ADS86_SPI, (uint32_t)XMC_USIC_CH_RXFIFO_EVENT_STANDARD |
                                                  (uint32_t)XMC_USIC_CH_RXFIFO_EVENT_ERROR);
 
+        NVIC_ClearPendingIRQ(ADS86_RXFIFO_Isr_Type);
+        NVIC_ClearPendingIRQ(ADS86_RVS_PIN_Isr_Type);
+
         NVIC_EnableIRQ(ADS86_RXFIFO_Isr_Type);
         NVIC_EnableIRQ(ADS86_RVS_PIN_Isr_Type);
 
@@ -1057,7 +1027,7 @@ void ADS86XX_Start_ServiceInIsr(void)
         XMC_CCU8_SLICE_StartTimer(ADS86_SAMPLING_CCU8_SLICE_PTR);
 
         #ifdef PRINT_INFO
-        printf("\n******** Goto ISR mode... ********\n");
+        printf("\nGoto ISR mode...\n");
         #endif
     }
 }
@@ -1072,14 +1042,21 @@ void ADS86XX_ServiceInPolling(void)
         ads_acq_start();
 
         /* Get data */
-        adsOutputData = ads86_send_cmd(ADS86_CMD_NOP, 0U, 0U);
+        uint32_t tmp_u32 = ads86_send_cmd(ADS86_CMD_NOP, 0U, 0U);
+
+        #if   (ADS86_ANALOG_IN_TYPE == ADS86_ANALOG_IN_TYPE_BIPOLAR)
+        float32_t tmp_pu = ADS86XX_bipolar_2_pu(tmp_u32 >> ADS86_CONV_RESAULT_POS);
+        #elif (ADS86_ANALOG_IN_TYPE == ADS86_ANALOG_IN_TYPE_UNIPOLAR)
+        float32_t tmp_pu = ADS86XX_unipolar_2_pu(tmp_u32 >> ADS86_CONV_RESAULT_POS);
+        #else
+        #error "ADS86_ANALOG_IN_TYPE wrong configuration!!!"
+        #endif
+
+        /* Update global variable */
+        adsMeasure_pu = tmp_pu;
+        adsOutputData = tmp_u32;
 
         #if (ADS86_PUT_DATA_TO_DAC_EN == 1)
-        /* Update DAC
-         * Input signal for ADS86 is bipolar, conversion result is unipolar so
-         * remove offset at middle scale (-0.5) is necessary.
-         * Conversion to per unit */
-        float32_t tmp_pu = ((float32_t)(adsOutputData >> ADS86_CONV_RESAULT_POS) / (float32_t)ADS86_MAX_VAL) - 0.5f;
         DAC_Ch0_PU_2_DAC(tmp_pu);
         #endif
 
@@ -1094,7 +1071,7 @@ void ADS86XX_ServiceInPolling(void)
 
             /* Read alarm register */
             ads86_send_cmd(ADS86_CMD_READ_HWORD, ADS86_ALARM_REG, 0U);
-            uint32_t tmp_u32 = ads86_send_cmd(ADS86_CMD_NOP, 0U, 0U);
+            tmp_u32 = ads86_send_cmd(ADS86_CMD_NOP, 0U, 0U);
             /* Only lower words is occupied by alarm flags */
             adsAlarmsReg |= (uint16_t)(tmp_u32 >> 16);
 
@@ -1108,6 +1085,12 @@ void ADS86XX_ServiceInPolling(void)
     }
 }
 
+float32_t ADS86XX_GetMeasure_PU(void)
+{
+    float32_t u = adsMeasure_pu;
+
+    return u;
+}
 /* Switch off pedantic checking */
 #if defined ( __GNUC__ )
 #pragma GCC diagnostic pop
